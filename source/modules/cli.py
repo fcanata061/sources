@@ -1,168 +1,188 @@
+#!/usr/bin/env python3
 import argparse
+import sys
+import subprocess
 from rich.console import Console
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
-import subprocess
-import sys
+from rich.progress import Progress
+from rich.spinner import Spinner
+from rich.panel import Panel
 
-from modules.config import config
-from modules import build, remove, search, info, upgrade, update, auto, cache, sync, history, hooks
+# módulos internos
+from source.modules import (
+    build,
+    remove,
+    search,
+    info,
+    upgrade,
+    update,
+    sync,
+    cache,
+    history,
+    auto,
+    hooks,
+    binpkg,
+    config,
+)
 
 console = Console()
 
-class SourceCLI:
-    def __init__(self):
-        self.parser = argparse.ArgumentParser(
-            prog="source",
-            description="Source Package Manager",
+def run_hooks(stage: str):
+    """Executa hooks globais definidos no source.conf"""
+    hook_path = None
+    if stage == "pre":
+        hook_path = config.get("hooks", "pre_hooks", fallback=None)
+    elif stage == "post":
+        hook_path = config.get("hooks", "post_hooks", fallback=None)
+
+    if hook_path:
+        try:
+            subprocess.run(hook_path, shell=True, check=True)
+            console.print(f"[green]✓ Hook {stage} executado[/green]")
+        except subprocess.CalledProcessError:
+            console.print(f"[red]✗ Hook {stage} falhou[/red]")
+
+
+def notify(title, message):
+    """Notifica no desktop se estiver habilitado"""
+    if config.getboolean("notifications", "enabled", fallback=False):
+        subprocess.run(
+            ["notify-send", title, message],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        self.subparsers = self.parser.add_subparsers(dest="command")
 
-        # Aliases
-        self.commands = {
-            "install": ("i", self.cmd_install),
-            "remove": ("r", self.cmd_remove),
-            "search": ("s", self.cmd_search),
-            "info": ("in", self.cmd_info),
-            "upgrade": ("ug", self.cmd_upgrade),
-            "update": ("up", self.cmd_update),
-            "build": ("b", self.cmd_build),
-            "sync": ("sy", self.cmd_sync),
-            "cache-clean": ("cc", self.cmd_cache_clean),
-            "cache-deepclean": ("dc", self.cmd_cache_deepclean),
-            "history": ("h", self.cmd_history),
-            "auto": ("a", self.cmd_auto),
-            "rebuild-system": ("rsys", self.cmd_rebuild_system),
-            "rebuild": ("rb", self.cmd_rebuild),
-        }
 
-        for cmd, (alias, func) in self.commands.items():
-            sp = self.subparsers.add_parser(cmd, aliases=[alias])
-            sp.set_defaults(func=func)
-            sp.add_argument("args", nargs="*")
+def main():
+    parser = argparse.ArgumentParser(
+        prog="source",
+        description="Source Package Manager CLI",
+    )
+    subparsers = parser.add_subparsers(dest="command")
 
-        # Flags globais
-        self.parser.add_argument("--dry-run", action="store_true", help="Executar em modo simulado")
-        self.parser.add_argument("--no-color", action="store_true", help="Desativar cores")
-        self.parser.add_argument("--no-animations", action="store_true", help="Desativar animações")
+    # --- build ---
+    build_parser = subparsers.add_parser("build", aliases=["b"], help="Build a package")
+    build_parser.add_argument("package", help="Package to build")
+    build_parser.add_argument(
+        "--with-install",
+        action="store_true",
+        help="Also install after build",
+    )
 
-    def run(self):
-        args = self.parser.parse_args()
+    # --- install ---
+    install_parser = subparsers.add_parser("install", aliases=["i"], help="Install a package")
+    install_parser.add_argument("package", help="Package to install")
 
-        # Config global herdada do source.conf
-        self.dry_run = args.dry_run or config.dry_run
-        self.use_colors = not args.no_color and config.use_colors
-        self.use_animations = not args.no_animations and config.use_animations
+    # --- remove ---
+    remove_parser = subparsers.add_parser("remove", aliases=["r"], help="Remove a package")
+    remove_parser.add_argument("package", help="Package to remove")
 
-        if not args.command:
-            self.parser.print_help()
-            return
+    # --- search ---
+    search_parser = subparsers.add_parser("search", aliases=["s"], help="Search packages")
+    search_parser.add_argument("query", help="Search term")
 
-        func = getattr(args, "func", None)
-        if func:
-            self._run_with_hooks(func, args)
+    # --- info ---
+    info_parser = subparsers.add_parser("info", aliases=["in"], help="Show package info")
+    info_parser.add_argument("package", help="Package to show info")
 
-    # =====================
-    # Hooks globais
-    # =====================
-    def _run_with_hooks(self, func, args):
-        if config.pre_hooks and not self.dry_run:
-            subprocess.call([config.pre_hooks, args.command])
+    # --- upgrade ---
+    subparsers.add_parser("upgrade", aliases=["ug"], help="Upgrade installed packages")
 
-        func(args)
+    # --- update ---
+    subparsers.add_parser("update", aliases=["up"], help="Check for new versions")
 
-        if config.post_hooks and not self.dry_run:
-            subprocess.call([config.post_hooks, args.command])
+    # --- sync ---
+    subparsers.add_parser("sync", aliases=["sy"], help="Sync recipes from git repo")
 
-    # =====================
-    # Comandos
-    # =====================
-    def cmd_install(self, args):
-        for pkg in args.args:
-            self._simulate_or_run(lambda: build.install(pkg), f"📦 Instalando {pkg}")
+    # --- cache ---
+    cache_parser = subparsers.add_parser("cache", help="Cache operations")
+    cache_parser.add_argument("action", choices=["clean", "deepclean"], help="Cache action")
 
-    def cmd_remove(self, args):
-        for pkg in args.args:
-            self._simulate_or_run(lambda: remove.remove(pkg), f"🗑️ Removendo {pkg}")
+    # --- history ---
+    subparsers.add_parser("history", aliases=["h"], help="Show build/install history")
 
-    def cmd_search(self, args):
-        term = args.args[0] if args.args else ""
-        results = search.search(term)
-        table = Table(title=f"🔍 Resultados para '{term}'")
-        table.add_column("Pacote", style="cyan")
-        table.add_column("Versão", style="green")
-        table.add_column("Descrição", style="yellow")
-        for r in results:
-            table.add_row(r["name"], r["version"], r["desc"])
-        console.print(table)
+    # --- auto ---
+    subparsers.add_parser("auto", aliases=["a"], help="Auto build/install pending packages")
 
-    def cmd_info(self, args):
-        for pkg in args.args:
-            data = info.get_info(pkg)
-            table = Table(title=f"ℹ️ Info: {pkg}")
-            for k, v in data.items():
-                table.add_row(str(k), str(v))
+    # --- rebuild-system ---
+    subparsers.add_parser("rebuild-system", aliases=["rsys"], help="Rebuild the whole system")
+
+    # --- rebuild (single pkg) ---
+    rebuild_parser = subparsers.add_parser("rebuild", aliases=["rb"], help="Rebuild a package")
+    rebuild_parser.add_argument("package", help="Package to rebuild")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    # Executa hooks globais
+    run_hooks("pre")
+
+    try:
+        if args.command in ["build", "b"]:
+            builder = build.Builder()
+            builder.build(args.package, with_install=args.with_install)
+            notify("Source", f"Build finalizado: {args.package}")
+
+        elif args.command in ["install", "i"]:
+            binpkg.install(args.package)
+            notify("Source", f"Instalado: {args.package}")
+
+        elif args.command in ["remove", "r"]:
+            remove.remove(args.package)
+            notify("Source", f"Removido: {args.package}")
+
+        elif args.command in ["search", "s"]:
+            results = search.search(args.query)
+            table = Table(title=f"Resultados para {args.query}")
+            table.add_column("Nome", style="cyan")
+            table.add_column("Versão", style="green")
+            table.add_column("Descrição", style="white")
+            for r in results:
+                table.add_row(r["name"], r["version"], r["summary"])
             console.print(table)
 
-    def cmd_upgrade(self, args):
-        pkgs = args.args or []
-        self._simulate_or_run(lambda: upgrade.upgrade(pkgs), "⬆️ Atualizando pacotes")
+        elif args.command in ["info", "in"]:
+            pkginfo = info.get_info(args.package)
+            console.print(Panel(str(pkginfo), title=f"Info: {args.package}", style="bold green"))
 
-    def cmd_update(self, args):
-        self._simulate_or_run(update.update_all, "🔄 Procurando novas versões")
+        elif args.command in ["upgrade", "ug"]:
+            upgrader = upgrade.Upgrader()
+            upgrader.upgrade_world()
 
-    def cmd_build(self, args):
-        for pkg in args.args:
-            self._simulate_or_run(lambda: build.build(pkg), f"⚙️ Build {pkg}")
+        elif args.command in ["update", "up"]:
+            updater = update.Updater()
+            updater.check_all()
 
-    def cmd_sync(self, args):
-        self._simulate_or_run(sync.sync_repo, "🔄 Sincronizando repositório")
+        elif args.command in ["sync", "sy"]:
+            sync.sync()
 
-    def cmd_cache_clean(self, args):
-        self._simulate_or_run(cache.clean, "🧹 Limpando cache")
+        elif args.command == "cache":
+            if args.action == "clean":
+                cache.clean()
+            elif args.action == "deepclean":
+                cache.deepclean()
 
-    def cmd_cache_deepclean(self, args):
-        self._simulate_or_run(cache.deepclean, "🔥 Deepclean cache")
+        elif args.command in ["history", "h"]:
+            history.show()
 
-    def cmd_history(self, args):
-        history.show_history()
+        elif args.command in ["auto", "a"]:
+            auto.run()
 
-    def cmd_auto(self, args):
-        self._simulate_or_run(auto.auto_manage, "🤖 Gerenciando pacotes automaticamente")
+        elif args.command in ["rebuild-system", "rsys"]:
+            history.rebuild_system()
 
-    def cmd_rebuild_system(self, args):
-        self._simulate_or_run(build.rebuild_system, "♻️ Recompilando todo o sistema")
+        elif args.command in ["rebuild", "rb"]:
+            history.rebuild_package(args.package)
 
-    def cmd_rebuild(self, args):
-        for pkg in args.args:
-            self._simulate_or_run(lambda: build.rebuild(pkg), f"♻️ Recompilando {pkg}")
+    except Exception as e:
+        console.print(f"[red]Erro: {e}[/red]")
+        sys.exit(1)
 
-    # =====================
-    # Helpers
-    # =====================
-    def _simulate_or_run(self, func, message):
-        if self.dry_run:
-            console.print(f"[yellow][DRY-RUN][/yellow] {message}")
-            return
+    run_hooks("post")
 
-        if self.use_animations:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]{task.description}"),
-                BarColumn(),
-                transient=True,
-            ) as progress:
-                task = progress.add_task(message, total=None)
-                try:
-                    func()
-                    progress.update(task, completed=1)
-                    console.print(f"[green]✅ {message} concluído[/green]")
-                except Exception as e:
-                    console.print(f"[red]❌ Erro: {e}[/red]")
-        else:
-            console.print(f"[blue]{message}...[/blue]")
-            try:
-                func()
-                console.print(f"[green]✅ {message} concluído[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Erro: {e}[/red]")
+
+if __name__ == "__main__":
+    main()
