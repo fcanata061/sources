@@ -1,115 +1,198 @@
-# modules/cli/cli.py
+# source/modules/cli.py
+"""
+CLI principal do gerenciador de pacotes.
+Integra módulos: build, recipe, hooks, sandbox, fakeroot, logger.
+"""
 
 import argparse
-from ..install.build import Builder
-from ..upgrade.upgrade import Upgrader
-from ..remove.remove import Remover
-from ..use.flags import UseFlags
-from ..use.query import UseQuery
-from ..sync.sync import SyncManager
-from ..logging.logger import Logger
+import sys
+import os
+from modules import build, recipe, hooks, sandbox, fakeroot, logger
 
-class SourceCLI:
-    """
-    Interface de linha de comando (CLI) para o gerenciador de pacotes source.
-    """
 
-    def __init__(self):
-        self.logger = Logger()
-        self.parser = argparse.ArgumentParser(
-            prog="source",
-            description="Gerenciador de pacotes - Source"
-        )
-        self.subparsers = self.parser.add_subparsers(dest="command")
+def main(argv=None):
+    argv = argv or sys.argv[1:]
+    log = logger.Logger("cli.log")
 
-        # comandos principais
-        self._add_install()
-        self._add_remove()
-        self._add_upgrade()
-        self._add_flags()
-        self._add_sync()
-        self._add_create()
-        self._add_history()
+    # Inicializa gerenciadores
+    builder = build.Builder(dry_run=False)
+    recipeman = recipe.RecipeManager()
+    hookman = hooks.HookManager()
+    fk = fakeroot.FakeRoot()
+    log.info("CLI inicializado")
 
-    # ----------------------
-    # Definições de comandos
-    # ----------------------
+    parser = argparse.ArgumentParser(
+        prog="sources",
+        description="Gerenciador de pacotes Linux (source-based)"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    def _add_install(self):
-        sp = self.subparsers.add_parser("install", aliases=["i"], help="Instalar pacotes")
-        sp.add_argument("package", help="Nome do pacote a instalar")
+    # -------------------------------
+    # Recipes
+    # -------------------------------
+    p_new = sub.add_parser("new", help="Criar nova receita (alias: n)")
+    p_new.add_argument("dest", help="Diretório destino")
+    p_new.add_argument("--name", required=True)
+    p_new.add_argument("--version", required=True)
+    p_new.add_argument("--build-system", default="make")
+    p_new.add_argument("--summary", default="")
+    p_new.add_argument("--description", default="")
 
-    def _add_remove(self):
-        sp = self.subparsers.add_parser("remove", aliases=["rm"], help="Remover pacotes")
-        sp.add_argument("package", help="Nome do pacote a remover")
-        sp.add_argument("--force", action="store_true", help="Forçar remoção ignorando dependências")
+    p_validate = sub.add_parser("validate", help="Validar receita (alias: val)")
+    p_validate.add_argument("path", help="Caminho da receita")
 
-    def _add_upgrade(self):
-        sp = self.subparsers.add_parser("upgrade", aliases=["up"], help="Atualizar pacotes")
-        sp.add_argument("package", nargs="?", help="Nome do pacote (vazio = todo o sistema)")
+    p_fp = sub.add_parser("fingerprint", help="Calcular fingerprint (alias: fp)")
+    p_fp.add_argument("path")
+    p_fp.add_argument("--source")
 
-    def _add_flags(self):
-        sp = self.subparsers.add_parser("flags", aliases=["fl"], help="Consultar USE flags")
-        sp.add_argument("package", nargs="?", help="Nome do pacote para exibir flags")
-        sp.add_argument("--list", action="store_true", help="Listar todas as flags globais")
-        sp.add_argument("--enable", help="Ativar flag global")
-        sp.add_argument("--disable", help="Desativar flag global")
+    p_info = sub.add_parser("info", help="Exibir informações da receita (alias: in)")
+    p_info.add_argument("path")
 
-    def _add_sync(self):
-        sp = self.subparsers.add_parser("sync", aliases=["s"], help="Sincronizar repositório")
+    p_search = sub.add_parser("search", help="Procurar receitas (alias: s)")
+    p_search.add_argument("term", help="Termo de busca")
+    p_search.add_argument("--dir", default="recipes", help="Diretório base de receitas")
 
-    def _add_create(self):
-        sp = self.subparsers.add_parser("create", aliases=["c"], help="Criar nova receita")
-        sp.add_argument("package", help="Nome do pacote a criar")
+    # -------------------------------
+    # Build / install
+    # -------------------------------
+    p_build = sub.add_parser("build", help="Compilar pacote (alias: b)")
+    p_build.add_argument("path")
+    p_build.add_argument("--sandbox", default="sandbox")
+    p_build.add_argument("--dry-run", action="store_true")
 
-    def _add_history(self):
-        sp = self.subparsers.add_parser("history", aliases=["h"], help="Exibir histórico de operações")
-        sp.add_argument("--limit", type=int, default=50, help="Número de registros a exibir")
+    p_install = sub.add_parser("install", help="Instalar pacote (alias: i)")
+    p_install.add_argument("archive")
+    p_install.add_argument("--prefix", default="/usr/local")
 
-    # ----------------------
-    # Execução de comandos
-    # ----------------------
+    p_remove = sub.add_parser("remove", help="Remover pacote (alias: rm)")
+    p_remove.add_argument("name")
 
-    def run(self, args=None):
-        args = self.parser.parse_args(args)
+    p_upgrade = sub.add_parser("upgrade", help="Atualizar pacote (alias: up)")
+    p_upgrade.add_argument("path")
 
-        if args.command in ("install", "i"):
-            self.logger.info(f"Instalando {args.package}...")
-            # chamar módulo install futuramente
+    # -------------------------------
+    # Sistema / status
+    # -------------------------------
+    p_hooks = sub.add_parser("hooks", help="Listar hooks globais")
+    p_graph = sub.add_parser("graph", help="Exportar grafo de dependências")
+    p_graph.add_argument("--dir", default="recipes", help="Diretório de receitas")
+    p_graph.add_argument("--out", default="deps.dot")
 
-        elif args.command in ("remove", "rm"):
-            self.logger.info(f"Removendo {args.package} (force={args.force})...")
-            # chamar módulo remove futuramente
+    p_status = sub.add_parser("status", help="Listar pacotes instalados e cacheados")
 
-        elif args.command in ("upgrade", "up"):
-            if args.package:
-                self.logger.info(f"Atualizando pacote {args.package}...")
-            else:
-                self.logger.info("Atualizando todo o sistema...")
-            # chamar módulo upgrade futuramente
+    # -------------------------------
+    # Dispatch
+    # -------------------------------
+    args = parser.parse_args(argv)
 
-        elif args.command in ("flags", "fl"):
-            if args.list:
-                self.logger.info("Listando todas as USE flags globais...")
-            elif args.package:
-                self.logger.info(f"Exibindo flags do pacote {args.package}...")
-            elif args.enable:
-                self.logger.success(f"Ativando flag global {args.enable}")
-            elif args.disable:
-                self.logger.warning(f"Desativando flag global {args.disable}")
-            # integrar com módulo use futuramente
+    # Aliases → comando
+    aliases = {
+        "n": "new", "val": "validate", "fp": "fingerprint",
+        "in": "info", "s": "search", "b": "build",
+        "i": "install", "rm": "remove", "up": "upgrade"
+    }
+    if args.command in aliases:
+        args.command = aliases[args.command]
 
-        elif args.command in ("sync", "s"):
-            self.logger.info("Sincronizando repositório...")
-            # chamar módulo sync futuramente
+    # Recipes
+    if args.command == "new":
+        recipeman.create(args.dest, args.name, args.version,
+                         args.build_system, args.summary, args.description)
+        return 0
 
-        elif args.command in ("create", "c"):
-            self.logger.info(f"Criando nova receita para {args.package}...")
-            # chamar módulo create futuramente
+    elif args.command == "validate":
+        r = recipeman.load(args.path)
+        recipeman.validate(r)
+        print("Recipe válida ✅")
+        return 0
 
-        elif args.command in ("history", "h"):
-            self.logger.info(f"Exibindo histórico (limite={args.limit})...")
-            # chamar módulo history futuramente
+    elif args.command == "fingerprint":
+        r = recipeman.load(args.path)
+        fp = recipeman.compute_fingerprint(args.source or args.path, r)
+        print(fp)
+        return 0
 
+    elif args.command == "info":
+        r = recipeman.load(args.path)
+        print("--- Info da Receita ---")
+        for k, v in r.items():
+            print(f"{k}: {v}")
+        return 0
+
+    elif args.command == "search":
+        results = []
+        for root, _, files in os.walk(args.dir):
+            if "recipe.yaml" in files:
+                path = os.path.join(root, "recipe.yaml")
+                rec = recipeman.load(path)
+                if args.term.lower() in rec.get("name", "").lower() or \
+                   args.term.lower() in rec.get("summary", "").lower():
+                    results.append((rec["name"], rec.get("version"), path))
+        if not results:
+            print("Nenhuma receita encontrada")
         else:
-            self.parser.print_help()
+            for name, version, path in results:
+                print(f"{name}-{version} -> {path}")
+        return 0
+
+    # Build
+    elif args.command == "build":
+        b = build.Builder(dry_run=args.dry_run)
+        recipe_data = recipeman.load(args.path)
+        sb = sandbox.Sandbox(recipe_data["name"], base_dir=args.sandbox, dry_run=args.dry_run)
+        sb.prepare()
+        archive = b.build_package(recipe_data, sb)
+        print(f"Pacote gerado: {archive}")
+        return 0
+
+    elif args.command == "install":
+        fk.install(args.archive, prefix=args.prefix)
+        return 0
+
+    elif args.command == "remove":
+        fk.remove(args.name)
+        return 0
+
+    elif args.command == "upgrade":
+        recipe_data = recipeman.load(args.path)
+        sb = sandbox.Sandbox(recipe_data["name"])
+        sb.prepare()
+        archive = builder.build_package(recipe_data, sb)
+        fk.install(archive)
+        print(f"Pacote {recipe_data['name']} atualizado ✅")
+        return 0
+
+    # Hooks
+    elif args.command == "hooks":
+        h = hookman.list_hooks()
+        print("Hooks globais:")
+        for stage, funcs in h.items():
+            print(f" - {stage}: {funcs}")
+        return 0
+
+    # Grafo
+    elif args.command == "graph":
+        deps = {}
+        for root, _, files in os.walk(args.dir):
+            if "recipe.yaml" in files:
+                rec = recipeman.load(os.path.join(root, "recipe.yaml"))
+                deps[rec["name"]] = rec.get("depends", [])
+        builder.export_graph(deps, output=args.out)
+        print(f"Grafo exportado em {args.out}")
+        return 0
+
+    # Status
+    elif args.command == "status":
+        print("Pacotes instalados:")
+        for pkg in fk.list_installed():
+            print(f" - {pkg}")
+        print("Pacotes em cache:")
+        for pkg in builder.list_cache():
+            print(f" - {pkg}")
+        return 0
+
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
