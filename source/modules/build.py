@@ -1,30 +1,91 @@
-# modules/install/build.py
+# source/modules/build.py
+import os
+from modules import logger, sandbox, fakeroot, hooks
+
 
 class Builder:
-    """
-    Classe responsável por construir pacotes dentro do sandbox.
-    Suporta: autotools, meson, ninja, cmake, rust, python
-    """
-    def __init__(self, recipe, sandbox_path, dest_path):
-        self.recipe = recipe
-        self.sandbox_path = sandbox_path
-        self.dest_path = dest_path
+    def __init__(self, package_name: str, source_dir: str,
+                 build_dir: str = "build", dry_run: bool = False):
+        self.package_name = package_name
+        self.source_dir = os.path.abspath(source_dir)
+        self.build_dir = os.path.abspath(build_dir)
+        self.dry_run = dry_run
 
-    def prepare_sandbox(self):
-        """Cria diretórios temporários para build e instalação"""
-        pass
+        # Logger central
+        self.log = logger.Logger(f"{self.package_name}.log")
 
-    def apply_hooks(self, stage):
-        """
-        Executa hooks definidos na receita
-        Stages: pre_configure, post_configure, pre_build, post_build, pre_install, post_install
-        """
-        pass
+        # Instâncias de módulos auxiliares
+        self.sandbox = sandbox.Sandbox(package_name, dry_run=dry_run)
+        self.fakeroot = fakeroot.Fakeroot(dry_run=dry_run)
+        self.hooks = hooks.HookManager(source_dir, dry_run=dry_run)
 
-    def build(self):
-        """Executa a compilação automática baseada no sistema de build definido na receita"""
-        pass
+    # -------------------------------
+    # Utilitários
+    # -------------------------------
+    def _run_hooks(self, stage: str):
+        """Executa hooks de receita, locais e globais"""
+        self.log.debug(f"Executando hooks para {stage}")
 
-    def install(self):
-        """Instala o pacote usando fakeroot dentro do sandbox"""
-        pass
+        # Hooks em recipe.yaml
+        recipe_hooks = self.hooks.load_from_recipe(stage)
+        for cmd in recipe_hooks:
+            self.fakeroot.run(cmd, shell=True)
+
+        # Hooks locais
+        self.hooks.run(stage)
+
+        # Hooks globais
+        self.hooks.run_global(stage)
+
+    # -------------------------------
+    # Fluxo principal
+    # -------------------------------
+    def prepare(self):
+        self._run_hooks("pre-prepare")
+        self.sandbox.prepare()
+        self._run_hooks("post-prepare")
+        self.log.info(f"Sandbox preparado em {self.sandbox.path}")
+
+    def build(self, build_system: str = "make"):
+        self._run_hooks("pre-build")
+        self.log.info(f"Compilando {self.package_name} com {build_system}")
+
+        if build_system == "cmake":
+            self.fakeroot.run(["cmake", self.source_dir], cwd=self.build_dir)
+            self.fakeroot.run(["make", "-j"], cwd=self.build_dir)
+        elif build_system == "meson":
+            self.fakeroot.run(["meson", self.build_dir, self.source_dir])
+            self.fakeroot.run(["ninja", "-C", self.build_dir])
+        else:
+            self.fakeroot.run(["./configure"], cwd=self.source_dir)
+            self.fakeroot.run(["make", "-j"], cwd=self.source_dir)
+
+        self._run_hooks("post-build")
+        self.log.info("Build concluído")
+
+    def install(self, build_system: str = "make"):
+        self._run_hooks("pre-install")
+        self.log.info(f"Instalando {self.package_name} no sandbox {self.sandbox.path}")
+
+        env = os.environ.copy()
+        env["DESTDIR"] = self.sandbox.path
+
+        if build_system == "cmake":
+            self.fakeroot.run(["make", "install"], cwd=self.build_dir, env=env)
+        elif build_system == "meson":
+            self.fakeroot.run(["ninja", "-C", self.build_dir, "install"], env=env)
+        else:
+            self.fakeroot.run(["make", "install"], cwd=self.source_dir, env=env)
+
+        self._run_hooks("post-install")
+        self.log.info(f"{self.package_name} instalado em {self.sandbox.path}")
+
+    def package(self, output_dir="packages"):
+        self._run_hooks("pre-package")
+        os.makedirs(output_dir, exist_ok=True)
+
+        archive_name = os.path.join(output_dir, f"{self.package_name}.tar.gz")
+        self.sandbox.archive(archive_name)
+
+        self._run_hooks("post-package")
+        self.log.info(f"Pacote gerado: {archive_name}")
