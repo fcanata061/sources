@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""
+CLI principal do gerenciador de pacotes source.
+Entry point que importa os módulos e executa comandos.
+"""
+
+import sys
+import os
+
+# Adiciona o caminho dos módulos
+MODULES_PATH = "/source/modules"
+if MODULES_PATH not in sys.path:
+    sys.path.insert(0, MODULES_PATH)
+
+from modules.cli import SourceCLI
+from modules.utils import Utils
+
+def main():
+    # Cria a CLI e executa
+    cli = SourceCLI()
+    cli.run()
+
+if __name__ == "__main__":
+    main()
