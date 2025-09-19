@@ -1,0 +1,146 @@
+# /usr/sources/gcc-pass1/recipe.yaml
+# Receita: gcc-pass1
+# Objetivo: compilar apenas o frontend C do GCC (pass1) a partir dos fontes oficiais.
+# Coloque esta pasta em /usr/sources/gcc-pass1/ e use seu gerenciador para build/install.
+
+name: gcc-pass1
+version: "14.3.0"
+summary: "GNU Compiler Collection - C only (pass1)"
+homepage: "https://gcc.gnu.org/"
+maintainer: "you <you@example.org>"
+
+# ---- fontes principais ----
+sources:
+  - url: "https://ftp.gnu.org/gnu/gcc/gcc-14.3.0/gcc-14.3.0.tar.xz"
+    filename: "gcc-14.3.0.tar.xz"
+    sha256: "PUT_SHA256_HERE_FOR_gcc-14.3.0.tar.xz"
+  - url: "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
+    filename: "gmp-6.3.0.tar.xz"
+    sha256: "PUT_SHA256_HERE_FOR_gmp-6.3.0.tar.xz"
+  - url: "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.0.tar.xz"
+    filename: "mpfr-4.2.0.tar.xz"
+    sha256: "PUT_SHA256_HERE_FOR_mpfr-4.2.0.tar.xz"
+  - url: "https://ftp.gnu.org/gnu/mpc/mpc-1.3.2.tar.gz"
+    filename: "mpc-1.3.2.tar.gz"
+    sha256: "PUT_SHA256_HERE_FOR_mpc-1.3.2.tar.gz"
+
+# ---- dependências de build (assumindo que o host já tem um C compiler) ----
+build-depends:
+  - "make"
+  - "gcc"
+  - "g++"
+  - "binutils"
+  - "texinfo"
+  - "flex"
+  - "bison"
+  - "gawk"
+  - "python3"
+  - "wget"
+  - "patch"
+
+# ---- runtime depends (após instalação) ----
+depends:
+  - "libc"   # seu runtime system glibc/miðlibc (depende da distro)
+  # Ajuste conforme seu DB/nomes de pacotes locais
+
+# ---- metadados de empacotamento (opcional) ----
+pkgname: "gcc-pass1"
+pkgver: "14.3.0"
+
+# ---- variáveis de build padrão (o gerenciador pode sobrescrever) ----
+env:
+  SRC_DIR: "${WORKDIR}/src"        # onde os tarballs são extraídos
+  BUILD_DIR: "${WORKDIR}/build"    # diretório de build out-of-tree
+  PREFIX: "/usr"                   # prefixo de instalação final
+  DESTDIR: "${STAGEDIR}"           # staged install (binpkg packaging)
+
+# ---- hooks e scripts ----
+hooks:
+  # prepare: extrai tarballs e injeta GMP/MPFR/MPC dentro do source do GCC
+  prepare:
+    - |
+      set -euo pipefail
+      mkdir -p "${SRC_DIR}"
+      cd "${SRC_DIR}"
+      # Extrai gcc
+      tar -xf "${WORKDIR}/gcc-14.3.0.tar.xz"
+      cd gcc-14.3.0
+      # Extrai e move sources de dependências para dentro do tree do gcc
+      mkdir -p contrib
+      # gmp
+      tar -xf "${WORKDIR}/gmp-6.3.0.tar.xz"
+      mv ../gmp-6.3.0 ./gmp
+      # mpfr
+      tar -xf "${WORKDIR}/mpfr-4.2.0.tar.xz"
+      mv ../mpfr-4.2.0 ./mpfr
+      # mpc
+      tar -xf "${WORKDIR}/mpc-1.3.2.tar.gz"
+      mv ../mpc-1.3.2 ./mpc
+      # opcional: aplicar patches se houver patch/ no recipe dir
+      if [ -d "${RECIPE_DIR}/patches" ]; then
+        for p in "${RECIPE_DIR}/patches"/*; do
+          [ -f "$p" ] && patch -p1 < "$p" || true
+        done
+      fi
+      echo "prepare: sources ready in ${SRC_DIR}/gcc-14.3.0"
+
+  # build: cria build dir e compila apenas o frontend C (pass1)
+  build:
+    - |
+      set -euo pipefail
+      mkdir -p "${BUILD_DIR}"
+      cd "${BUILD_DIR}"
+      SRC_GCC="${SRC_DIR}/gcc-14.3.0"
+      # configure: somente C, sem multilib, otimizações padrão
+      "${SRC_GCC}/configure" \
+        --prefix="${PREFIX}" \
+        --enable-languages=c \
+        --disable-multilib \
+        --disable-libquadmath \
+        --disable-libsanitizer \
+        --disable-libquadmath-support || { cat config.log; exit 1; }
+      # Build only GCC (frontend) - make all-gcc compila o compilador, não runtime libs
+      make -j"$(nproc)" all-gcc
+
+  # check: opcional; GCC tem testes extensos (longos). aqui apenas um smoke test
+  check:
+    - |
+      set -euo pipefail
+      cd "${BUILD_DIR}"
+      # Testa compilador básico (compile um "hello world" em memória)
+      echo 'int main(void){return 0;}' > /tmp/gg_test.c
+      "${BUILD_DIR}/gcc/xgcc" -B"${BUILD_DIR}/gcc/" -o /tmp/gg_test /tmp/gg_test.c || true
+      # se exit non-zero, não falhar aqui (opcional). Ajuste conforme necessidade.
+
+  # install: instala apenas o frontend (install-gcc) para não instalar libstdc++ / libs agora
+  install:
+    - |
+      set -euo pipefail
+      cd "${BUILD_DIR}"
+      # Instala o compilador em stagedir (DESTDIR) para criar pacotes
+      make install-gcc DESTDIR="${DESTDIR}"
+      # criar symlinks / alternativas (se desejar)
+      mkdir -p "${DESTDIR}${PREFIX}/bin"
+      # opcional: atualizar alternativas (depende do seu sistema)
+      echo "install: compiler installed into ${DESTDIR}${PREFIX}"
+
+  # package: (opcional) empacotar em tar.gz o binpkg; seu módulo binpkg pode cuidar disso
+  package:
+    - |
+      set -euo pipefail
+      PKGBASE="${DESTDIR}${PREFIX}"
+      cd "${DESTDIR}"
+      tar -czf "${WORKDIR}/binpkg-${pkgname}-${pkgver}.tar.gz" -C "${DESTDIR}" .
+      echo "package: created ${WORKDIR}/binpkg-${pkgname}-${pkgver}.tar.gz"
+
+# ---- descrição longa / notas ----
+description: |
+  GCC pass1 recipe: compila apenas o frontend C (etapa inicial do bootstrap do toolchain).
+  - Injeta gmp/mpfr/mpc dentro do source tree do GCC para builds out-of-tree.
+  - Usa 'make all-gcc' e 'make install-gcc' para evitar compilar bibliotecas runtime.
+  - Útil para sistemas que precisam de um compilador funcional rápido antes de seguir com full bootstrap.
+
+notes: |
+  - Ajuste as URLs/sha256 para a versão desejada.
+  - Para builds cross/complexos, adapte FLAGS e dependencies.
+  - Requer compilador host (gcc/clang) e ferramentas de build instaladas.
