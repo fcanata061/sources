@@ -1,0 +1,31 @@
+[package]
+name = binutils-pass1
+version = 2.43
+summary = "Binutils (pass 1) - assembler, linker e utilitários"
+license = GPL-3.0
+homepage = https://www.gnu.org/software/binutils/
+
+[source]
+url = https://ftp.gnu.org/gnu/binutils/binutils-2.43.tar.xz
+sha256 = <INSERE_SHA256_AQUI>
+
+[dependencies]
+build = []
+runtime = []
+
+[build]
+commands = 
+    mkdir -v build
+    cd build
+    ../configure \
+        --prefix=/tools \
+        --with-sysroot=$LFS \
+        --target=$LFS_TGT \
+        --disable-nls \
+        --disable-werror
+    make
+
+[install]
+commands =
+    cd build
+    make install
