@@ -1,0 +1,213 @@
+============================================================
+                 SOURCE PACKAGE MANAGER
+============================================================
+
+Gerenciador de pacotes baseado em recipes e builds
+isolados com sandbox + fakeroot.
+
+------------------------------------------------------------
+1. DEPENDÊNCIAS
+------------------------------------------------------------
+Para compilar e rodar o "source", você precisa dos pacotes:
+
+- Python 3.8+
+- python3-yaml
+- python3-rich
+- git
+- make
+- gcc
+- fakeroot
+- tar, xz, gzip, bzip2
+- notify-send (para notificações desktop)
+
+------------------------------------------------------------
+2. INSTALAÇÃO
+------------------------------------------------------------
+1. Clone o repositório:
+   git clone https://github.com/fcanata061/sources.git
+   cd sources
+
+2. Configure o arquivo:
+   cp source/source.conf.example /etc/source.conf
+   edite conforme necessário.
+
+3. Instale os módulos no Python:
+   export PYTHONPATH=$PWD
+
+4. Execute via CLI:
+   ./source/modules/cli.py --help
+
+------------------------------------------------------------
+3. ESTRUTURA DE DIRETÓRIOS
+------------------------------------------------------------
+Por padrão:
+
+/usr/sources/           -> repositório de receitas
+/usr/sources/core/      -> receitas principais
+/usr/sources/extra/     -> receitas adicionais
+/usr/sources/cache/     -> cache de downloads
+/usr/sources/build/     -> diretório temporário de build
+/usr/sources/packages/  -> pacotes binários gerados
+/usr/sources/logs/      -> logs de build/install/remove
+/usr/sources/state/     -> banco de pacotes instalados
+
+------------------------------------------------------------
+4. ARQUIVO DE CONFIGURAÇÃO (source.conf)
+------------------------------------------------------------
+Arquivo INI-style em /etc/source.conf
+
+Exemplo:
+
+[general]
+repo_dir = /usr/sources
+cache_dir = /usr/sources/cache
+log_dir = /usr/sources/logs
+sandbox_enabled = true
+fakeroot_enabled = true
+
+[hooks]
+pre_hooks = /usr/sources/scripts/pre.sh
+post_hooks = /usr/sources/scripts/post.sh
+
+[notifications]
+enabled = true
+
+------------------------------------------------------------
+5. RECEITAS (recipe.yaml)
+------------------------------------------------------------
+Formato YAML.
+
+Blocos suportados:
+
+package:
+  name: nome-do-pacote
+  version: 1.0
+  release: 1
+  summary: descrição
+  license: GPL-3.0
+  homepage: url
+
+source:
+  url: link do tarball
+  sha256: hash
+  type: tarball | git
+
+git:
+  repo: url do repo git
+  branch: main
+  commit: latest
+
+dependencies:
+  build:
+    - gcc
+    - make
+  runtime:
+    - libc
+
+hooks:
+  pre_build:
+    - comando
+  post_build:
+    - comando
+  pre_install:
+    - comando
+  post_install:
+    - comando
+  pre_remove:
+    - comando
+  post_remove:
+    - comando
+
+build:
+  - ./configure --prefix=/usr
+  - make -j$(nproc)
+
+check:
+  - make test
+
+install:
+  - make install DESTDIR=$DESTDIR
+
+files:
+  - /usr/bin/example
+  - /usr/lib/libexample.so
+
+meta:
+  maintainer: "Seu Nome <email>"
+  architecture: x86_64
+  section: utils
+  priority: optional
+
+------------------------------------------------------------
+6. HOOKS SUPORTADOS
+------------------------------------------------------------
+- pre_build / post_build
+- pre_install / post_install
+- pre_remove / post_remove
+- hooks globais: pre_hooks / post_hooks (definidos no source.conf)
+
+------------------------------------------------------------
+7. COMANDOS DO CLI
+------------------------------------------------------------
+Todos os comandos suportados (com abreviações):
+
+build (b) <pkg>          -> compila um pacote
+  --with-install         -> instala após compilar
+
+install (i) <pkg>        -> instala um pacote binário
+
+remove (r) <pkg>         -> remove um pacote
+
+search (s) <query>       -> busca pacotes
+
+info (in) <pkg>          -> mostra informações
+
+upgrade (ug)             -> atualiza todos os pacotes instalados
+
+update (up)              -> verifica novas versões upstream
+
+sync (sy)                -> sincroniza receitas do repositório git
+
+cache clean              -> limpa cache de tarballs
+cache deepclean          -> limpa tudo do cache
+
+history (h)              -> mostra histórico de builds e installs
+
+auto (a)                 -> resolve dependências e instala automaticamente
+
+rebuild-system (rsys)    -> recompila todo o sistema
+
+rebuild (rb) <pkg>       -> recompila um pacote
+
+------------------------------------------------------------
+8. FLUXO DE EXECUÇÃO
+------------------------------------------------------------
+Exemplo: source build nano --with-install
+
+1. Executa hooks globais "pre_hooks"
+2. Executa hooks "pre_build" da recipe
+3. Executa build:
+   - baixa tarball/git
+   - confere sha256
+   - extrai
+   - compila
+4. Executa hooks "post_build"
+5. Se --with-install:
+   - executa hooks "pre_install"
+   - executa install
+   - executa hooks "post_install"
+6. Executa hooks globais "post_hooks"
+
+------------------------------------------------------------
+9. BOAS PRÁTICAS
+------------------------------------------------------------
+- Sempre verifique sha256 das fontes.
+- Separe dependências de build e runtime.
+- Use DESTDIR no install para não poluir o sistema.
+- Use hooks para ajustes específicos.
+- Use arquivos "files:" para rastrear remoção limpa.
+- Centralize configurações no source.conf.
+
+============================================================
+FIM DO MANUAL
+============================================================
