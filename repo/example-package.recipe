@@ -1,0 +1,62 @@
+package:
+  name: example-package
+  version: 1.0.0
+  release: 1
+  summary: "Exemplo de receita completa para o gerenciador source"
+  license: MIT
+  homepage: https://example.org
+
+source:
+  url: https://example.org/downloads/example-package-1.0.0.tar.gz
+  sha256: "<INSERE_SHA256_AQUI>"
+  type: tarball   # pode ser: tarball | git
+
+git:
+  repo: https://github.com/example/example-package.git
+  branch: main
+  commit: latest  # ou hash específico
+
+dependencies:
+  build:
+    - gcc
+    - make
+  runtime:
+    - libc
+    - bash
+
+hooks:
+  pre_build:
+    - echo "🔧 Preparando ambiente de build..."
+    - ./autogen.sh
+  post_build:
+    - echo "✅ Build concluído"
+  pre_install:
+    - echo "⚡ Iniciando instalação..."
+  post_install:
+    - echo "🎉 Instalação finalizada!"
+    - ldconfig || true
+  pre_remove:
+    - echo "⚠️ Removendo example-package..."
+  post_remove:
+    - echo "🗑️ Pacote removido com sucesso!"
+
+build:
+  - ./configure --prefix=/usr --enable-feature-x
+  - make -j$(nproc)
+
+check:
+  - make test || true
+
+install:
+  - make install DESTDIR=$DESTDIR
+
+files:
+  - /usr/bin/example
+  - /usr/lib/libexample.so
+  - /usr/share/doc/example-package/*
+
+meta:
+  maintainer: "Seu Nome <voce@example.org>"
+  architecture: x86_64
+  section: utils
+  priority: optional
